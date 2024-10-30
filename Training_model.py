@@ -1,107 +1,79 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, EarlyStoppingCallback
-from datasets import load_dataset
-from peft import LoraConfig, get_peft_model
 import json
 import torch
+from datasets import load_dataset
+from transformers import AutoTokenizer, AutoModelForCausalLM, Trainer, TrainingArguments
 
 
-def main():
-    # 模型保存目录
-    save_directory = "./qwen2_5-0_5b_model"
-
-    # 加载本地模型和 tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(save_directory, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(save_directory, trust_remote_code=True)
-
-    # 将模型移到 GPU（如果可用）
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-
-    # 准备数据集（使用 JSON 文件）
+def train_model():
+    # 1. 加载数据（使用 JSON 文件）
     data_files = {
-        "train": "train.jsonl",
-        "validation": "valid.jsonl",
+        "train": "train.jsonl",       # 训练集文件
+        "validation": "valid.jsonl",  # 验证集文件
     }
     dataset = load_dataset("json", data_files=data_files)
 
-    # 创建 LoRA 配置
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        lora_dropout=0.05,
-        target_modules=["q_proj", "v_proj"],
-        bias="none",
-        task_type="CAUSAL_LM"
-    )
+    # 2. 加载模型和tokenizer
+    model_name = "./qwen2_5-0_5b_model"  # 替换为你使用的模型名称，如 "Qwen/qwen-2.5-0.5b"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
 
-    # 应用 PEFT 微调模型
-    model = get_peft_model(model, lora_config)
+    # 3. 将模型移到 GPU（如果可用）
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
 
-    # 定义 tokenizer 预处理函数
+    # 如果有GPU则打印出型号
+    if torch.cuda.is_available():
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        print("Using CPU now")
+
+    # 4. 数据预处理
     def preprocess_function(examples):
-        inputs = []
-        for instruction, input_text in zip(examples["instruction"], examples["input"]):
-            instruction = instruction.strip()
-            input_text = input_text.strip()
-            if input_text:
-                prompt = f"指令：{instruction} 输入：{input_text} "
-            else:
-                prompt = f"指令：{instruction} "
-            inputs.append(prompt)
+        inputs = [p for p in examples['prompt']]
+        outputs = [r for r in examples['response']]
 
-        model_inputs = tokenizer(inputs, max_length=50, truncation=True, padding="max_length", return_tensors="pt")
-        labels = tokenizer(examples["output"], max_length=50, truncation=True, padding="max_length", return_tensors="pt")["input_ids"]
+        max_length = 80  # 统一设置输入和输出的最大长度
 
-        # 确保 labels 和输入对齐，且忽略 padding 的部分
-        model_inputs["labels"] = labels.clone()
-        model_inputs["labels"][model_inputs["labels"] == tokenizer.pad_token_id] = -100
+        model_inputs = tokenizer(inputs, max_length=max_length, truncation=True, padding='max_length')
+
+        # 设置 labels，限制输出长度
+        model_inputs["labels"] = tokenizer(outputs, max_length=max_length, truncation=True, padding='max_length')[
+            "input_ids"]
+
         return model_inputs
 
-    # 处理数据集
-    tokenized_dataset = dataset.map(preprocess_function, batched=True, num_proc=4)
+    # 预处理数据集
+    tokenized_dataset = dataset.map(preprocess_function, batched=True)
 
-    # 设置训练参数
+    # 5. 设置训练参数
     training_args = TrainingArguments(
         output_dir="./lulab-model-checkpoints",
         evaluation_strategy="epoch",
         learning_rate=5e-5,
-        per_device_train_batch_size=8,
-        per_device_eval_batch_size=8,
-        num_train_epochs=50,
+        per_device_train_batch_size=2,
+        num_train_epochs=10,
         weight_decay=0.01,
-        logging_dir="./logs",
-        logging_steps=10,
-        save_strategy="epoch",
-        save_total_limit=2,
-        fp16=True,
-        push_to_hub=False,
-        load_best_model_at_end=True
     )
 
-    # 使用 Trainer API 进行微调
+    # 6. 创建 Trainer
     trainer = Trainer(
         model=model,
         args=training_args,
-        train_dataset=tokenized_dataset["train"],
-        eval_dataset=tokenized_dataset["validation"],
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
+        train_dataset=tokenized_dataset['train'],
+        eval_dataset=tokenized_dataset['validation'],  # 使用验证集进行评估
     )
 
-    # 开始训练
+    # 7. 开始训练
     trainer.train()
 
-    # 保存微调后的模型
+    # 8. 保存模型
     trainer.save_model("./lulab-model")
-
-    # 生成 config.json
-    config_file_path = "./lulab-model/config.json"
-    with open(config_file_path, 'w') as f:
-        json.dump(model.config.to_dict(), f)
-
-    # 保存 tokenizer
-    tokenizer.save_pretrained("./lulab-model")
+    tokenizer.save_pretrained("./lulab-model")  # 添加这行代码保存 tokenizer
 
 
+# 调用函数开始训练
 if __name__ == "__main__":
-    print(torch.cuda.get_device_name(0))
-    main()
+    print("PyTorch version:", torch.__version__)  # 当前版本
+    print("CUDA available:", torch.cuda.is_available())  # 是否有可用的CUDA支持
+    print("CUDA version:", torch.version.cuda)  # PyTorch版本编译时所兼容的CUDA版本
+    train_model()
