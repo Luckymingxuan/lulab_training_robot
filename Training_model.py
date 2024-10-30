@@ -45,13 +45,13 @@ def train_model():
     # 预处理数据集
     tokenized_dataset = dataset.map(preprocess_function, batched=True)
 
-    # 5. 设置训练参数
+    # 5. 设置训练参数 - 可以调整学习率1e-5最好
     training_args = TrainingArguments(
         output_dir="./lulab-model-checkpoints",
         evaluation_strategy="epoch",
-        learning_rate=5e-5,
-        per_device_train_batch_size=2,
-        num_train_epochs=10,
+        learning_rate=1e-5,
+        per_device_train_batch_size=8,
+        num_train_epochs=30,
         weight_decay=0.01,
     )
 
