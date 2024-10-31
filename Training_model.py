@@ -32,7 +32,7 @@ def train_model():
         inputs = [p for p in examples['prompt']]
         outputs = [r for r in examples['response']]
 
-        max_length = 80  # 统一设置输入和输出的最大长度
+        max_length = 110  # 统一设置输入和输出的最大长度
 
         model_inputs = tokenizer(inputs, max_length=max_length, truncation=True, padding='max_length')
 
